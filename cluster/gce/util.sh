@@ -189,13 +189,26 @@ function detect-master () {
 }
 
 # Ensure that we have a password created for validating to the master.  Will
-# read from $HOME/.kubernetres_auth if available.
+# read from the kubernetes auth-file for the current context if available.
+#
+# Assumed vars
+#   KUBE_ROOT
 #
 # Vars set:
 #   KUBE_USER
 #   KUBE_PASSWORD
 function get-password {
-  local file="$HOME/.kubernetes_auth"
+  local get_auth_path='''
+import yaml, sys
+cfg = yaml.load(sys.stdin)
+try:
+  current = cfg["current-context"]
+  user = cfg["contexts"][current]["user"]
+  print cfg["users"][user]["auth-path"]
+except KeyError:
+  pass
+'''
+  local file=$("${KUBE_ROOT}/cluster/kubectl.sh" config view --global | python -c "${get_auth_path}")
   if [[ -r "$file" ]]; then
     KUBE_USER=$(cat "$file" | python -c 'import json,sys;print json.load(sys.stdin)["User"]')
     KUBE_PASSWORD=$(cat "$file" | python -c 'import json,sys;print json.load(sys.stdin)["Password"]')
@@ -203,16 +216,6 @@ function get-password {
   fi
   KUBE_USER=admin
   KUBE_PASSWORD=$(python -c 'import string,random; print "".join(random.SystemRandom().choice(string.ascii_letters + string.digits) for _ in range(16))')
-
-  # Remove this code, since in all use cases I can see, we are overwriting this
-  # at cluster creation time.
-  cat << EOF > "$file"
-{
-  "User": "$KUBE_USER",
-  "Password": "$KUBE_PASSWORD"
-}
-EOF
-  chmod 0600 "$file"
 }
 
 # Generate authentication token for admin user. Will
@@ -505,30 +508,44 @@ function kube-up {
 
   echo "Kubernetes cluster created."
 
-  local kube_cert=".kubecfg.crt"
-  local kube_key=".kubecfg.key"
-  local ca_cert=".kubernetes.ca.crt"
+  local kube_cert="kubecfg.crt"
+  local kube_key="kubecfg.key"
+  local ca_cert="kubernetes.ca.crt"
+  # TODO use token instead of kube_auth
+  local kube_auth="kubernetes_auth"
+
+  local kubectl="${KUBE_ROOT}/cluster/kubectl.sh"
+  local context="${INSTANCE_PREFIX}"
+  local user="${INSTANCE_PREFIX}-admin"
+  local config_dir="${HOME}/.kube/${context}"
 
   # TODO: generate ADMIN (and KUBELET) tokens and put those in the master's
   # config file.  Distribute the same way the htpasswd is done.
-  (umask 077
-   gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/kubecfg.crt" >"${HOME}/${kube_cert}" 2>/dev/null
-   gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/kubecfg.key" >"${HOME}/${kube_key}" 2>/dev/null
-   gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/ca.crt" >"${HOME}/${ca_cert}" 2>/dev/null
+  (
+   mkdir -p "${config_dir}"
+   umask 077
+   gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/kubecfg.crt" >"${config_dir}/${kube_cert}" 2>/dev/null
+   gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/kubecfg.key" >"${config_dir}/${kube_key}" 2>/dev/null
+   gcloud compute ssh --project "${PROJECT}" --zone "$ZONE" "${MASTER_NAME}" --command "sudo cat /srv/kubernetes/ca.crt" >"${config_dir}/${ca_cert}" 2>/dev/null
 
-   cat << EOF > ~/.kubernetes_auth
+   "${kubectl}" config set-cluster "${context}" --server="https://${KUBE_MASTER_IP}" --certificate-authority="${config_dir}/${ca_cert}" --global
+   "${kubectl}" config set-credentials "${user}" --auth-path="${config_dir}/${kube_auth}" --global
+   "${kubectl}" config set-context "${context}" --cluster="${context}" --user="${user}" --global
+   "${kubectl}" config use-context "${context}" --global
+
+   cat << EOF > "${config_dir}/${kube_auth}"
 {
   "User": "$KUBE_USER",
   "Password": "$KUBE_PASSWORD",
-  "CAFile": "$HOME/$ca_cert",
-  "CertFile": "$HOME/$kube_cert",
-  "KeyFile": "$HOME/$kube_key"
+  "CAFile": "${config_dir}/${ca_cert}",
+  "CertFile": "${config_dir}/${kube_cert}",
+  "KeyFile": "${config_dir}/${kube_key}"
 }
 EOF
 
-   chmod 0600 ~/.kubernetes_auth "${HOME}/${kube_cert}" \
-     "${HOME}/${kube_key}" "${HOME}/${ca_cert}"
-   echo Wrote ~/.kubernetes_auth
+   chmod 0600 "${config_dir}/${kube_auth}" "${config_dir}/$kube_cert" \
+     "${config_dir}/${kube_key}" "${config_dir}/${ca_cert}"
+   echo "Wrote ${config_dir}/${kube_auth}"
   )
 
   echo "Sanity checking cluster..."
@@ -576,7 +593,7 @@ EOF
   echo
   echo -e "${color_yellow}  https://${KUBE_MASTER_IP}"
   echo
-  echo -e "${color_green}The user name and password to use is located in ~/.kubernetes_auth.${color_norm}"
+  echo -e "${color_green}The user name and password to use is located in ${config_dir}/${kube_auth}.${color_norm}"
   echo
 
 }
@@ -792,6 +809,27 @@ function setup-logging-firewall {
   detect-project
   gcloud compute firewall-rules create "${INSTANCE_PREFIX}-fluentd-elasticsearch-logging" --project "${PROJECT}" \
     --allow tcp:5601 tcp:9200 tcp:9300 --target-tags "${MINION_TAG}" --network="${NETWORK}"
+
+  # This should be nearly instant once kube-addons gets a chance to
+  # run, and we already know we can hit the apiserver, but it's still
+  # worth checking.
+  echo "waiting for logging services to be created by the master."
+  local kubectl="${KUBE_ROOT}/cluster/kubectl.sh"
+  for i in `seq 1 10`; do
+    if "${kubectl}" get services -l name=kibana-logging -o template -t {{range.items}}{{.id}}{{end}} | grep -q kibana-logging &&
+      "${kubectl}" get services -l name=elasticsearch-logging -o template -t {{range.items}}{{.id}}{{end}} | grep -q elasticsearch-logging; then
+      break
+    fi
+    sleep 10
+  done
+
+  local -r region="${ZONE::-2}"
+  local -r es_ip=$(gcloud compute forwarding-rules --project "${PROJECT}" describe --region "${region}" elasticsearch-logging | grep IPAddress | awk '{print $2}')
+  local -r kibana_ip=$(gcloud compute forwarding-rules --project "${PROJECT}" describe --region "${region}" kibana-logging | grep IPAddress | awk '{print $2}')
+  echo
+  echo -e "${color_green}Cluster logs are ingested into Elasticsearch running at ${color_yellow}http://${es_ip}:9200"
+  echo -e "${color_green}Kibana logging dashboard will be available at ${color_yellow}http://${kibana_ip}:5601${color_norm}"
+  echo
 }
 
 function teardown-logging-firewall {
