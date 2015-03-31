@@ -26,6 +26,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/validation"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/generic"
@@ -174,4 +175,52 @@ func ResourceLocation(getter ResourceGetter, ctx api.Context, id string) (*url.U
 		loc.Host = net.JoinHostPort(pod.Status.PodIP, port)
 	}
 	return loc, nil, nil
+}
+
+// LogLocation returns a URL to the pod's log
+func LogLocation(getter ResourceGetter, kubeletClient client.KubeletClient, ctx api.Context, id string) (*url.URL, http.RoundTripper, error) {
+	// Allow ID as "podname" or "podname:container".  If container is not specified,
+	// try to use the first defined container on the pod.
+	parts := strings.Split(id, ":")
+	if len(parts) > 2 {
+		return nil, nil, errors.NewBadRequest(fmt.Sprintf("invalid pod request %q", id))
+	}
+	name := parts[0]
+	container := ""
+	if len(parts) == 2 {
+		container = parts[1]
+	}
+
+	obj, err := getter.Get(ctx, name)
+	if err != nil {
+		return nil, nil, err
+	}
+	pod := obj.(*api.Pod)
+	if pod == nil {
+		return nil, nil, nil
+	}
+
+	// Try to figure out a port.
+	if container == "" {
+		if len(pod.Spec.Containers) > 0 {
+			container = pod.Spec.Containers[0].Name
+		}
+	}
+
+	nodeHost := pod.Status.Host
+	if len(nodeHost) == 0 {
+		// Error?
+		return nil, nil, nil
+	}
+	nodeScheme, nodePort, nodeTransport, err := kubeletClient.GetConnectionInfo(nodeHost)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// We leave off the scheme ('http://') because we have no idea what sort of server
+	// is listening at this endpoint.
+	logsURL := fmt.Sprintf("%s://%s:%d/containerLogs/%s/%s/%s", nodeScheme, nodeHost, nodePort, pod.Namespace, name, container)
+	loc, _ := url.Parse(logsURL)
+
+	return loc, nodeTransport, nil
 }

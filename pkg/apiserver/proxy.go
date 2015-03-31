@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/rest"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/httplog"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
@@ -77,139 +76,127 @@ var tagsToAttrs = map[string]util.StringSet{
 	// TODO: css URLs hidden in style elements.
 }
 
-// ProxyHandler provides a http.Handler which will proxy traffic to locations
-// specified by items implementing Redirector.
-type ProxyHandler struct {
-	prefix                 string
-	storage                map[string]rest.Storage
+// ProxyHandlerFactory creates a http.Handler which will proxy traffic to locations
+// specified by items implementing Proxier.
+type ProxyHandlerFactory struct {
+	rootPrefix             string
 	codec                  runtime.Codec
 	context                api.RequestContextMapper
 	apiRequestInfoResolver *APIRequestInfoResolver
 }
 
-func (r *ProxyHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	var verb string
-	var apiResource string
-	var httpCode int
-	reqStart := time.Now()
-	defer monitor("proxy", &verb, &apiResource, &httpCode, reqStart)
+// GetHandler returns a handler for a given proxier
+func (r *ProxyHandlerFactory) GetHandler(proxier rest.Proxier, prefix, suffix string, prefixParts int) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		var verb string
+		var apiResource string
+		var httpCode int
+		reqStart := time.Now()
+		defer monitor("proxy", &verb, &apiResource, &httpCode, reqStart)
 
-	requestInfo, err := r.apiRequestInfoResolver.GetAPIRequestInfo(req)
-	if err != nil {
-		notFound(w, req)
-		httpCode = http.StatusNotFound
-		return
-	}
-	verb = requestInfo.Verb
-	namespace, resource, parts := requestInfo.Namespace, requestInfo.Resource, requestInfo.Parts
-
-	ctx, ok := r.context.Get(req)
-	if !ok {
-		ctx = api.NewContext()
-	}
-	ctx = api.WithNamespace(ctx, namespace)
-	if len(parts) < 2 {
-		notFound(w, req)
-		httpCode = http.StatusNotFound
-		return
-	}
-	id := parts[1]
-	remainder := ""
-	if len(parts) > 2 {
-		proxyParts := parts[2:]
-		remainder = strings.Join(proxyParts, "/")
-		if strings.HasSuffix(req.URL.Path, "/") {
-			// The original path had a trailing slash, which has been stripped
-			// by KindAndNamespace(). We should add it back because some
-			// servers (like etcd) require it.
-			remainder = remainder + "/"
+		requestInfo, err := r.apiRequestInfoResolver.GetAPIRequestInfo(req)
+		if err != nil {
+			notFound(w, req)
+			httpCode = http.StatusNotFound
+			return
 		}
-	}
-	storage, ok := r.storage[resource]
-	if !ok {
-		httplog.LogOf(req, w).Addf("'%v' has no storage object", resource)
-		notFound(w, req)
-		httpCode = http.StatusNotFound
-		return
-	}
-	apiResource = resource
+		verb = requestInfo.Verb
+		namespace, resource, parts := requestInfo.Namespace, requestInfo.Resource, requestInfo.Parts
 
-	redirector, ok := storage.(rest.Redirector)
-	if !ok {
-		httplog.LogOf(req, w).Addf("'%v' is not a redirector", resource)
-		httpCode = errorJSON(errors.NewMethodNotSupported(resource, "proxy"), r.codec, w)
-		return
-	}
-
-	location, transport, err := redirector.ResourceLocation(ctx, id)
-	if err != nil {
-		httplog.LogOf(req, w).Addf("Error getting ResourceLocation: %v", err)
-		status := errToAPIStatus(err)
-		writeJSON(status.Code, r.codec, status, w)
-		httpCode = status.Code
-		return
-	}
-	if location == nil {
-		httplog.LogOf(req, w).Addf("ResourceLocation for %v returned nil", id)
-		notFound(w, req)
-		httpCode = http.StatusNotFound
-		return
-	}
-
-	// Default to http
-	if location.Scheme == "" {
-		location.Scheme = "http"
-	}
-	// Add the subpath
-	if len(remainder) > 0 {
-		location.Path = singleJoiningSlash(location.Path, remainder)
-	}
-	// Start with anything returned from the storage, and add the original request's parameters
-	values := location.Query()
-	for k, vs := range req.URL.Query() {
-		for _, v := range vs {
-			values.Add(k, v)
+		ctx, ok := r.context.Get(req)
+		if !ok {
+			ctx = api.NewContext()
 		}
-	}
-	location.RawQuery = values.Encode()
-
-	newReq, err := http.NewRequest(req.Method, location.String(), req.Body)
-	if err != nil {
-		status := errToAPIStatus(err)
-		writeJSON(status.Code, r.codec, status, w)
-		notFound(w, req)
-		httpCode = status.Code
-		return
-	}
-	httpCode = http.StatusOK
-	newReq.Header = req.Header
-
-	// TODO convert this entire proxy to an UpgradeAwareProxy similar to
-	// https://github.com/openshift/origin/blob/master/pkg/util/httpproxy/upgradeawareproxy.go.
-	// That proxy needs to be modified to support multiple backends, not just 1.
-	if r.tryUpgrade(w, req, newReq, location, transport) {
-		return
-	}
-
-	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: location.Scheme, Host: location.Host})
-	if transport == nil {
-		prepend := path.Join(r.prefix, resource, id)
-		if len(namespace) > 0 {
-			prepend = path.Join(r.prefix, "namespaces", namespace, resource, id)
+		ctx = api.WithNamespace(ctx, namespace)
+		if len(parts) < 2 {
+			notFound(w, req)
+			httpCode = http.StatusNotFound
+			return
 		}
-		transport = &proxyTransport{
-			proxyScheme:      req.URL.Scheme,
-			proxyHost:        req.URL.Host,
-			proxyPathPrepend: prepend,
+		id := parts[1]
+		remainder := ""
+		if len(parts) > prefixParts {
+			proxyParts := parts[prefixParts:]
+			remainder = strings.Join(proxyParts, "/")
+			if strings.HasSuffix(req.URL.Path, "/") {
+				// The original path had a trailing slash, which has been stripped
+				// by KindAndNamespace(). We should add it back because some
+				// servers (like etcd) require it.
+				remainder = remainder + "/"
+			}
 		}
+		location, transport, err := proxier.ResourceLocation(ctx, id)
+		if err != nil {
+			httplog.LogOf(req, w).Addf("Error getting ResourceLocation: %v", err)
+			status := errToAPIStatus(err)
+			writeJSON(status.Code, r.codec, status, w)
+			httpCode = status.Code
+			return
+		}
+		if location == nil {
+			httplog.LogOf(req, w).Addf("ResourceLocation for %v returned nil", id)
+			notFound(w, req)
+			httpCode = http.StatusNotFound
+			return
+		}
+
+		// Default to http
+		if location.Scheme == "" {
+			location.Scheme = "http"
+		}
+		// Add the subpath
+		if len(remainder) > 0 {
+			location.Path = singleJoiningSlash(location.Path, remainder)
+		}
+		// Start with anything returned from the storage, and add the original request's parameters
+		values := location.Query()
+		for k, vs := range req.URL.Query() {
+			for _, v := range vs {
+				values.Add(k, v)
+			}
+		}
+		location.RawQuery = values.Encode()
+
+		newReq, err := http.NewRequest(req.Method, location.String(), req.Body)
+		if err != nil {
+			status := errToAPIStatus(err)
+			writeJSON(status.Code, r.codec, status, w)
+			notFound(w, req)
+			httpCode = status.Code
+			return
+		}
+		httpCode = http.StatusOK
+		newReq.Header = req.Header
+
+		// TODO convert this entire proxy to an UpgradeAwareProxy similar to
+		// https://github.com/openshift/origin/blob/master/pkg/util/httpproxy/upgradeawareproxy.go.
+		// That proxy needs to be modified to support multiple backends, not just 1.
+		if proxier.SupportsUpgrade() {
+			if tryUpgrade(w, req, newReq, location, transport, r.codec) {
+				return
+			}
+		}
+
+		proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: location.Scheme, Host: location.Host})
+		if transport == nil {
+			prepend := path.Join(r.rootPrefix, prefix, resource, id, suffix)
+			if len(namespace) > 0 {
+				prepend = path.Join(r.rootPrefix, prefix, "namespaces", namespace, resource, id, suffix)
+			}
+			transport = &proxyTransport{
+				proxyScheme:      req.URL.Scheme,
+				proxyHost:        req.URL.Host,
+				proxyPathPrepend: prepend,
+			}
+		}
+		proxy.Transport = transport
+		proxy.FlushInterval = 200 * time.Millisecond
+		proxy.ServeHTTP(w, newReq)
 	}
-	proxy.Transport = transport
-	proxy.FlushInterval = 200 * time.Millisecond
-	proxy.ServeHTTP(w, newReq)
 }
 
 // tryUpgrade returns true if the request was handled.
-func (r *ProxyHandler) tryUpgrade(w http.ResponseWriter, req, newReq *http.Request, location *url.URL, transport http.RoundTripper) bool {
+func tryUpgrade(w http.ResponseWriter, req, newReq *http.Request, location *url.URL, transport http.RoundTripper, codec runtime.Codec) bool {
 	if !httpstream.IsUpgradeRequest(req) {
 		return false
 	}
@@ -217,7 +204,7 @@ func (r *ProxyHandler) tryUpgrade(w http.ResponseWriter, req, newReq *http.Reque
 	backendConn, err := dialURL(location, transport)
 	if err != nil {
 		status := errToAPIStatus(err)
-		writeJSON(status.Code, r.codec, status, w)
+		writeJSON(status.Code, codec, status, w)
 		return true
 	}
 	defer backendConn.Close()
@@ -228,14 +215,14 @@ func (r *ProxyHandler) tryUpgrade(w http.ResponseWriter, req, newReq *http.Reque
 	requestHijackedConn, _, err := w.(http.Hijacker).Hijack()
 	if err != nil {
 		status := errToAPIStatus(err)
-		writeJSON(status.Code, r.codec, status, w)
+		writeJSON(status.Code, codec, status, w)
 		return true
 	}
 	defer requestHijackedConn.Close()
 
 	if err = newReq.Write(backendConn); err != nil {
 		status := errToAPIStatus(err)
-		writeJSON(status.Code, r.codec, status, w)
+		writeJSON(status.Code, codec, status, w)
 		return true
 	}
 

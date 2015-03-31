@@ -36,6 +36,7 @@ import (
 	"github.com/emicklei/go-restful"
 )
 
+// APIInstaller installs an APIGroupVersion onto a restful.WebService
 type APIInstaller struct {
 	group  *APIGroupVersion
 	info   *APIRequestInfoResolver
@@ -53,26 +54,26 @@ type action struct {
 // errEmptyName is returned when API requests do not fill the name section of the path.
 var errEmptyName = errors.NewBadRequest("name must be provided")
 
-// Installs handlers for API resources.
+// Install handlers for API resources.
 func (a *APIInstaller) Install() (ws *restful.WebService, errors []error) {
 	errors = make([]error, 0)
 
 	// Create the WebService.
 	ws = a.newWebService()
 
-	redirectHandler := (&RedirectHandler{a.group.Storage, a.group.Codec, a.group.Context, a.info})
-	proxyHandler := (&ProxyHandler{a.prefix + "/proxy/", a.group.Storage, a.group.Codec, a.group.Context, a.info})
+	redirectHandlerFactory := (&RedirectHandlerFactory{a.group.Codec, a.group.Context, a.info})
+	proxyHandlerFactory := (&ProxyHandlerFactory{a.prefix, a.group.Codec, a.group.Context, a.info})
 
 	// Register the paths in a deterministic (sorted) order to get a deterministic swagger spec.
 	paths := make([]string, len(a.group.Storage))
-	var i int = 0
+	i := 0
 	for path := range a.group.Storage {
 		paths[i] = path
 		i++
 	}
 	sort.Strings(paths)
 	for _, path := range paths {
-		if err := a.registerResourceHandlers(path, a.group.Storage[path], ws, redirectHandler, proxyHandler); err != nil {
+		if err := a.registerResourceHandlers(path, a.group.Storage[path], ws, redirectHandlerFactory, proxyHandlerFactory); err != nil {
 			errors = append(errors, err)
 		}
 	}
@@ -90,7 +91,7 @@ func (a *APIInstaller) newWebService() *restful.WebService {
 	return ws
 }
 
-func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storage, ws *restful.WebService, redirectHandler, proxyHandler http.Handler) error {
+func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storage, ws *restful.WebService, redirectHandlerFactory *RedirectHandlerFactory, proxyHandlerFactory *ProxyHandlerFactory) error {
 	admit := a.group.Admit
 	context := a.group.Context
 
@@ -135,10 +136,22 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 	updater, isUpdater := storage.(rest.Updater)
 	patcher, isPatcher := storage.(rest.Patcher)
 	watcher, isWatcher := storage.(rest.Watcher)
-	_, isRedirector := storage.(rest.Redirector)
+	proxier, isProxier := storage.(rest.Proxier)
+	redirector, isRedirector := storage.(rest.Redirector)
 	storageMeta, isMetadata := storage.(rest.StorageMetadata)
 	if !isMetadata {
 		storageMeta = defaultStorageMetadata{}
+	}
+
+	// TODO: For now assume that everything that implements Redirector
+	// and is not a Proxier is a legacy proxy
+	isLegacyProxy := isRedirector && !isProxier
+	var proxyHandler http.HandlerFunc
+	if isProxier {
+		proxyHandler = proxyHandlerFactory.GetHandler(proxier, "", "proxy", 3)
+	} else if isLegacyProxy {
+		proxier = proxierAdapter(redirector)
+		proxyHandler = proxyHandlerFactory.GetHandler(proxier, "proxy", "", 2)
 	}
 
 	var versionedList interface{}
@@ -206,8 +219,9 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		actions = appendIf(actions, action{"DELETE", itemPath, nameParams, namer}, isDeleter)
 		actions = appendIf(actions, action{"WATCH", "watch/" + itemPath, nameParams, namer}, isWatcher)
 		actions = appendIf(actions, action{"REDIRECT", "redirect/" + itemPath, nameParams, namer}, isRedirector)
-		actions = appendIf(actions, action{"PROXY", "proxy/" + itemPath + "/{path:*}", nameParams, namer}, isRedirector)
-		actions = appendIf(actions, action{"PROXY", "proxy/" + itemPath, nameParams, namer}, isRedirector)
+		actions = appendIf(actions, action{"PROXY", "proxy/" + itemPath + "/{path:*}", nameParams, namer}, isLegacyProxy)
+		actions = appendIf(actions, action{"PROXY", "proxy/" + itemPath, nameParams, namer}, isLegacyProxy)
+		actions = appendIf(actions, action{"PROXY", itemPath, nameParams, namer}, isProxier)
 
 	} else {
 		// v1beta3 format with namespace in path
@@ -236,8 +250,9 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			actions = appendIf(actions, action{"DELETE", itemPath, nameParams, namer}, isDeleter)
 			actions = appendIf(actions, action{"WATCH", "watch/" + itemPath, nameParams, namer}, isWatcher)
 			actions = appendIf(actions, action{"REDIRECT", "redirect/" + itemPath, nameParams, namer}, isRedirector)
-			actions = appendIf(actions, action{"PROXY", "proxy/" + itemPath + "/{path:*}", nameParams, namer}, isRedirector)
-			actions = appendIf(actions, action{"PROXY", "proxy/" + itemPath, nameParams, namer}, isRedirector)
+			actions = appendIf(actions, action{"PROXY", "proxy/" + itemPath + "/{path:*}", nameParams, namer}, isLegacyProxy)
+			actions = appendIf(actions, action{"PROXY", "proxy/" + itemPath, nameParams, namer}, isLegacyProxy)
+			actions = appendIf(actions, action{"PROXY", itemPath, nameParams, namer}, isProxier)
 
 			// list across namespace.
 			namer = scopeNaming{scope, a.group.Linker, gpath.Join(a.prefix, itemPath), true}
@@ -270,8 +285,9 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			actions = appendIf(actions, action{"DELETE", itemPath, nameParams, namer}, isDeleter)
 			actions = appendIf(actions, action{"WATCH", "watch/" + itemPath, nameParams, namer}, isWatcher)
 			actions = appendIf(actions, action{"REDIRECT", "redirect/" + itemPath, nameParams, namer}, isRedirector)
-			actions = appendIf(actions, action{"PROXY", "proxy/" + itemPath + "/{path:*}", nameParams, namer}, isRedirector)
-			actions = appendIf(actions, action{"PROXY", "proxy/" + itemPath, nameParams, namer}, isRedirector)
+			actions = appendIf(actions, action{"PROXY", "proxy/" + itemPath + "/{path:*}", nameParams, namer}, isLegacyProxy)
+			actions = appendIf(actions, action{"PROXY", "proxy/" + itemPath, nameParams, namer}, isLegacyProxy)
+			actions = appendIf(actions, action{"PROXY", itemPath, nameParams, namer}, isProxier)
 		}
 	}
 
@@ -394,7 +410,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			addParams(route, action.Params)
 			ws.Route(route)
 		case "REDIRECT": // Get the redirect URL for a resource.
-			route := ws.GET(action.Path).To(routeFunction(redirectHandler)).
+			route := ws.GET(action.Path).To(routeFunction(redirectHandlerFactory.GetHandler(redirector))).
 				Filter(m).
 				Doc("redirect GET request to " + kind).
 				Operation("redirect" + kind).
@@ -402,12 +418,10 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 				Consumes("*/*")
 			addParams(route, action.Params)
 			ws.Route(route)
-		case "PROXY": // Proxy requests to a resource.
-			// Accept all methods as per https://github.com/GoogleCloudPlatform/kubernetes/issues/3996
-			addProxyRoute(ws, "GET", a.prefix, action.Path, proxyHandler, kind, resource, action.Params)
-			addProxyRoute(ws, "PUT", a.prefix, action.Path, proxyHandler, kind, resource, action.Params)
-			addProxyRoute(ws, "POST", a.prefix, action.Path, proxyHandler, kind, resource, action.Params)
-			addProxyRoute(ws, "DELETE", a.prefix, action.Path, proxyHandler, kind, resource, action.Params)
+		case "PROXY":
+			for _, method := range proxier.ProxyMethods() {
+				addProxyRoute(ws, method, a.prefix, action.Path, proxyHandler, kind, resource, action.Params)
+			}
 		default:
 			return fmt.Errorf("unrecognized action verb: %s", action.Verb)
 		}
@@ -717,4 +731,24 @@ var _ rest.StorageMetadata = defaultStorageMetadata{}
 
 func (defaultStorageMetadata) ProducesMIMETypes(verb string) []string {
 	return nil
+}
+
+// defaultProxier is an adapter for a legacy proxy store
+type defaultProxier struct {
+	rest.Redirector
+}
+
+// ProxyMethods returns a list of methods that can be proxied
+func (p *defaultProxier) ProxyMethods() []string {
+	return []string{"GET", "POST", "PUT", "DELETE"}
+}
+
+// SupportsUpgrade returns true if an upgrade to TCP should be supported on proxied endpoints
+func (p *defaultProxier) SupportsUpgrade() bool {
+	return true
+}
+
+// proxierAdapter creates a proxier adapter for a legacy redirector
+func proxierAdapter(redirector rest.Redirector) *defaultProxier {
+	return &defaultProxier{redirector}
 }

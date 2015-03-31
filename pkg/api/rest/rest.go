@@ -28,7 +28,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 )
 
-// RESTStorage is a generic interface for RESTful storage services.
+// Storage is a generic interface for RESTful storage services.
 // Resources which are exported to the RESTful API of apiserver need to implement this interface. It is expected
 // that objects may implement any of the below interfaces.
 type Storage interface {
@@ -119,6 +119,7 @@ type CreaterUpdater interface {
 // CreaterUpdater must satisfy the Updater interface.
 var _ Updater = CreaterUpdater(nil)
 
+// Patcher is a combination of Getter and Updater
 type Patcher interface {
 	Getter
 	Updater
@@ -148,6 +149,16 @@ type StandardStorage interface {
 type Redirector interface {
 	// ResourceLocation should return the remote location of the given resource, and an optional transport to use to request it, or an error.
 	ResourceLocation(ctx api.Context, id string) (remoteLocation *url.URL, transport http.RoundTripper, err error)
+}
+
+// Proxier supports proxying of connections
+type Proxier interface {
+	Redirector
+	// ProxyMethods returns a list of methods that can be proxied
+	ProxyMethods() []string
+
+	// SupportsUpgrade returns true if an upgrade to TCP should be supported on proxied endpoints
+	SupportsUpgrade() bool
 }
 
 // ResourceStreamer is an interface implemented by objects that prefer to be streamed from the server

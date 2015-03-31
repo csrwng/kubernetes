@@ -25,6 +25,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	etcderr "github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors/etcd"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/rest"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/generic"
@@ -35,13 +36,22 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util/fielderrors"
 )
 
-// rest implements a RESTStorage for pods against etcd
+// REST implements a RESTStorage for pods against etcd
 type REST struct {
 	etcdgeneric.Etcd
 }
 
+// PodStorage contains all pod storage objects
+type PodStorage struct {
+	Pod     *REST
+	Binding *BindingREST
+	Status  *StatusREST
+	Log     *LogREST
+	Proxy   *ProxyREST
+}
+
 // NewStorage returns a RESTStorage object that will work against pods.
-func NewStorage(h tools.EtcdHelper) (*REST, *BindingREST, *StatusREST) {
+func NewStorage(h tools.EtcdHelper, kc client.KubeletClient) PodStorage {
 	prefix := "/registry/pods"
 	store := &etcdgeneric.Etcd{
 		NewFunc:     func() runtime.Object { return &api.Pod{} },
@@ -74,7 +84,13 @@ func NewStorage(h tools.EtcdHelper) (*REST, *BindingREST, *StatusREST) {
 
 	statusStore.UpdateStrategy = pod.StatusStrategy
 
-	return &REST{*store}, &BindingREST{store: store}, &StatusREST{store: &statusStore}
+	return PodStorage{
+		Pod:     &REST{*store},
+		Binding: &BindingREST{store: store},
+		Status:  &StatusREST{store: &statusStore},
+		Log:     &LogREST{store: store, kubeletClient: kc},
+		Proxy:   &ProxyREST{store: store},
+	}
 }
 
 // Implement Redirector.
@@ -90,6 +106,7 @@ type BindingREST struct {
 	store *etcdgeneric.Etcd
 }
 
+// New creates a new pod binding
 func (r *BindingREST) New() runtime.Object {
 	return &api.Binding{}
 }
@@ -166,6 +183,7 @@ type StatusREST struct {
 	store *etcdgeneric.Etcd
 }
 
+// New creates a new Pod object
 func (r *StatusREST) New() runtime.Object {
 	return &api.Pod{}
 }
@@ -173,4 +191,55 @@ func (r *StatusREST) New() runtime.Object {
 // Update alters the status subset of an object.
 func (r *StatusREST) Update(ctx api.Context, obj runtime.Object) (runtime.Object, bool, error) {
 	return r.store.Update(ctx, obj)
+}
+
+// LogREST implements the REST endpoint for getting a pod's logs
+type LogREST struct {
+	store         *etcdgeneric.Etcd
+	kubeletClient client.KubeletClient
+}
+
+// New -- TODO: Create a versioned object that represents log options
+func (r *LogREST) New() runtime.Object {
+	return &api.Pod{}
+}
+
+// ResourceLocation returns a pods log location
+func (r *LogREST) ResourceLocation(ctx api.Context, name string) (*url.URL, http.RoundTripper, error) {
+	return pod.LogLocation(r.store, r.kubeletClient, ctx, name)
+}
+
+// ProxyMethods returns the methods supported by this proxy
+func (r *LogREST) ProxyMethods() []string {
+	return []string{"GET"}
+}
+
+// SupportsUpgrade returns true if an upgrade to TCP should be supported on proxied endpoints
+func (r *LogREST) SupportsUpgrade() bool {
+	return false
+}
+
+// ProxyREST implements a proxy endpoint for a pod
+type ProxyREST struct {
+	store *etcdgeneric.Etcd
+}
+
+// New -- TODO: Create a versioned object that represents proxy options
+func (r *ProxyREST) New() runtime.Object {
+	return &api.Pod{}
+}
+
+// ResourceLocation returns a pods proxy URL
+func (r *ProxyREST) ResourceLocation(ctx api.Context, name string) (*url.URL, http.RoundTripper, error) {
+	return pod.ResourceLocation(r.store, ctx, name)
+}
+
+// ProxyMethods returns the methods supported by this proxy
+func (r *ProxyREST) ProxyMethods() []string {
+	return []string{"GET", "PUT", "POST", "DELETE", "HEAD", "OPTIONS"}
+}
+
+// SupportsUpgrade returns true if an upgrade to TCP should be supported on proxied endpoints
+func (r *ProxyREST) SupportsUpgrade() bool {
+	return true
 }
