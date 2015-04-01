@@ -40,6 +40,7 @@ type PodStorage struct {
 	Pod     *REST
 	Binding *BindingREST
 	Status  *StatusREST
+	Log     *LogREST
 }
 
 // REST implements a RESTStorage for pods against etcd
@@ -85,6 +86,7 @@ func NewStorage(h tools.EtcdHelper) PodStorage {
 		Pod:     &REST{*store},
 		Binding: &BindingREST{store: store},
 		Status:  &StatusREST{store: &statusStore},
+		Log:     &LogREST{store: store},
 	}
 }
 
@@ -186,4 +188,14 @@ func (r *StatusREST) New() runtime.Object {
 // Update alters the status subset of an object.
 func (r *StatusREST) Update(ctx api.Context, obj runtime.Object) (runtime.Object, bool, error) {
 	return r.store.Update(ctx, obj)
+}
+
+// LogREST implements the log endpoint for a Pod
+type LogREST struct {
+	store *etcdgeneric.Etcd
+}
+
+// New creates a new Pod log options object
+func (r *LogREST) New() runtime.Object {
+	return &api.PodLogOptions{}
 }

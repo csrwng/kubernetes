@@ -383,6 +383,7 @@ func (m *Master) init(c *Config) {
 	m.storage = map[string]rest.Storage{
 		"pods":         podStorage.Pod,
 		"pods/status":  podStorage.Status,
+		"pods/log":     podStorage.Log,
 		"pods/binding": podStorage.Binding,
 		"bindings":     podStorage.Binding,
 
