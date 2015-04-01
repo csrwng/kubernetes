@@ -47,8 +47,8 @@ func newHelper(t *testing.T) (*tools.FakeEtcdClient, tools.EtcdHelper) {
 
 func newStorage(t *testing.T) (*REST, *BindingREST, *StatusREST, *tools.FakeEtcdClient, tools.EtcdHelper) {
 	fakeEtcdClient, h := newHelper(t)
-	storage, bindingStorage, statusStorage := NewStorage(h)
-	return storage, bindingStorage, statusStorage, fakeEtcdClient, h
+	storage := NewStorage(h)
+	return storage.Pod, storage.Binding, storage.Status, fakeEtcdClient, h
 }
 
 func validNewPod() *api.Pod {
@@ -89,7 +89,7 @@ func TestStorage(t *testing.T) {
 
 func TestCreate(t *testing.T) {
 	fakeEtcdClient, helper := newHelper(t)
-	storage, _, _ := NewStorage(helper)
+	storage := NewStorage(helper).Pod
 	test := resttest.New(t, storage, fakeEtcdClient.SetError)
 	pod := validNewPod()
 	pod.ObjectMeta = api.ObjectMeta{}
@@ -107,7 +107,7 @@ func TestCreate(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	fakeEtcdClient, helper := newHelper(t)
-	storage, _, _ := NewStorage(helper)
+	storage := NewStorage(helper).Pod
 	test := resttest.New(t, storage, fakeEtcdClient.SetError)
 
 	createFn := func() runtime.Object {
@@ -143,7 +143,7 @@ func expectPod(t *testing.T, out runtime.Object) (*api.Pod, bool) {
 func TestCreateRegistryError(t *testing.T) {
 	fakeEtcdClient, helper := newHelper(t)
 	fakeEtcdClient.Err = fmt.Errorf("test error")
-	storage, _, _ := NewStorage(helper)
+	storage := NewStorage(helper).Pod
 
 	pod := validNewPod()
 	_, err := storage.Create(api.NewDefaultContext(), pod)
@@ -154,7 +154,7 @@ func TestCreateRegistryError(t *testing.T) {
 
 func TestCreateSetsFields(t *testing.T) {
 	fakeEtcdClient, helper := newHelper(t)
-	storage, _, _ := NewStorage(helper)
+	storage := NewStorage(helper).Pod
 	pod := validNewPod()
 	_, err := storage.Create(api.NewDefaultContext(), pod)
 	if err != fakeEtcdClient.Err {
@@ -176,7 +176,7 @@ func TestCreateSetsFields(t *testing.T) {
 func TestListError(t *testing.T) {
 	fakeEtcdClient, helper := newHelper(t)
 	fakeEtcdClient.Err = fmt.Errorf("test error")
-	storage, _, _ := NewStorage(helper)
+	storage := NewStorage(helper).Pod
 	pods, err := storage.List(api.NewDefaultContext(), labels.Everything(), fields.Everything())
 	if err != fakeEtcdClient.Err {
 		t.Fatalf("Expected %#v, Got %#v", fakeEtcdClient.Err, err)
@@ -194,7 +194,7 @@ func TestListEmptyPodList(t *testing.T) {
 		E: fakeEtcdClient.NewError(tools.EtcdErrorCodeNotFound),
 	}
 
-	storage, _, _ := NewStorage(helper)
+	storage := NewStorage(helper).Pod
 	pods, err := storage.List(api.NewContext(), labels.Everything(), fields.Everything())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -230,7 +230,7 @@ func TestListPodList(t *testing.T) {
 			},
 		},
 	}
-	storage, _, _ := NewStorage(helper)
+	storage := NewStorage(helper).Pod
 
 	podsObj, err := storage.List(api.NewDefaultContext(), labels.Everything(), fields.Everything())
 	pods := podsObj.(*api.PodList)
@@ -279,7 +279,7 @@ func TestListPodListSelection(t *testing.T) {
 			},
 		},
 	}
-	storage, _, _ := NewStorage(helper)
+	storage := NewStorage(helper).Pod
 
 	ctx := api.NewDefaultContext()
 
@@ -344,7 +344,7 @@ func TestListPodListSelection(t *testing.T) {
 }
 
 func TestPodDecode(t *testing.T) {
-	storage, _, _ := NewStorage(tools.EtcdHelper{})
+	storage := NewStorage(tools.EtcdHelper{}).Pod
 	expected := validNewPod()
 	body, err := latest.Codec.Encode(expected)
 	if err != nil {
@@ -374,7 +374,7 @@ func TestGet(t *testing.T) {
 			},
 		},
 	}
-	storage, _, _ := NewStorage(helper)
+	storage := NewStorage(helper).Pod
 
 	obj, err := storage.Get(api.WithNamespace(api.NewContext(), "test"), "foo")
 	pod := obj.(*api.Pod)
@@ -391,7 +391,7 @@ func TestGet(t *testing.T) {
 func TestPodStorageValidatesCreate(t *testing.T) {
 	fakeEtcdClient, helper := newHelper(t)
 	fakeEtcdClient.Err = fmt.Errorf("test error")
-	storage, _, _ := NewStorage(helper)
+	storage := NewStorage(helper).Pod
 
 	pod := validNewPod()
 	pod.Labels = map[string]string{
@@ -409,7 +409,7 @@ func TestPodStorageValidatesCreate(t *testing.T) {
 // TODO: remove, this is covered by RESTTest.TestCreate
 func TestCreatePod(t *testing.T) {
 	_, helper := newHelper(t)
-	storage, _, _ := NewStorage(helper)
+	storage := NewStorage(helper).Pod
 
 	pod := validNewPod()
 	obj, err := storage.Create(api.NewDefaultContext(), pod)
@@ -431,7 +431,7 @@ func TestCreatePod(t *testing.T) {
 // TODO: remove, this is covered by RESTTest.TestCreate
 func TestCreateWithConflictingNamespace(t *testing.T) {
 	_, helper := newHelper(t)
-	storage, _, _ := NewStorage(helper)
+	storage := NewStorage(helper).Pod
 
 	pod := validNewPod()
 	pod.Namespace = "not-default"
@@ -460,7 +460,7 @@ func TestUpdateWithConflictingNamespace(t *testing.T) {
 			},
 		},
 	}
-	storage, _, _ := NewStorage(helper)
+	storage := NewStorage(helper).Pod
 
 	pod := validChangedPod()
 	pod.Namespace = "not-default"
@@ -577,7 +577,7 @@ func TestResourceLocation(t *testing.T) {
 				},
 			},
 		}
-		storage, _, _ := NewStorage(helper)
+		storage := NewStorage(helper).Pod
 
 		redirector := rest.Redirector(storage)
 		location, _, err := redirector.ResourceLocation(api.NewDefaultContext(), tc.query)
@@ -615,7 +615,7 @@ func TestDeletePod(t *testing.T) {
 			},
 		},
 	}
-	storage, _, _ := NewStorage(helper)
+	storage := NewStorage(helper).Pod
 
 	_, err := storage.Delete(api.NewDefaultContext(), "foo", nil)
 	if err != nil {
