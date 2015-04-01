@@ -186,7 +186,7 @@ func ResourceLocation(getter ResourceGetter, ctx api.Context, id string) (*url.U
 }
 
 // LogLocation returns a the log URL for a pod container. If container name is blank, the first container is used
-func LogLocation(getter ResourceGetter, connInfo client.ConnectionInfoGetter, ctx api.Context, name, container string) (*url.URL, http.RoundTripper, error) {
+func LogLocation(getter ResourceGetter, connInfo client.ConnectionInfoGetter, ctx api.Context, name string, opts *api.PodLogOptions) (*url.URL, http.RoundTripper, error) {
 
 	pod, err := getPod(getter, ctx, name)
 	if err != nil {
@@ -194,6 +194,7 @@ func LogLocation(getter ResourceGetter, connInfo client.ConnectionInfoGetter, ct
 	}
 
 	// Try to figure out a container
+	container := opts.Container
 	if container == "" {
 		if len(pod.Spec.Containers) > 0 {
 			container = pod.Spec.Containers[0].Name
@@ -211,5 +212,8 @@ func LogLocation(getter ResourceGetter, connInfo client.ConnectionInfoGetter, ct
 	}
 	logURL := fmt.Sprintf("%s://%s:%d/containerLogs/%s/%s/%s", nodeScheme, nodeHost, nodePort, pod.Namespace, name, container)
 	loc, _ := url.Parse(logURL)
+	if opts.Follow {
+		loc.RawQuery = "follow=true"
+	}
 	return loc, nodeTransport, nil
 }

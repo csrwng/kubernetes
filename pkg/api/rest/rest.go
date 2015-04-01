@@ -54,6 +54,13 @@ type Getter interface {
 	Get(ctx api.Context, name string) (runtime.Object, error)
 }
 
+// GetterWithOptions is an object that retrieve a named RESTful resource and takes
+// additional options on the get request
+type GetterWithOptions interface {
+	Get(ctx api.Context, name string, options runtime.Object) (runtime.Object, error)
+	NewGetOptions() runtime.Object
+}
+
 // Deleter is an object that can delete a named RESTful resource.
 type Deleter interface {
 	// Delete finds a resource in the storage and deletes it.

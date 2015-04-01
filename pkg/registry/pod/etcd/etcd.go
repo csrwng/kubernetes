@@ -30,6 +30,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/generic"
 	etcdgeneric "github.com/GoogleCloudPlatform/kubernetes/pkg/registry/generic/etcd"
+	genericrest "github.com/GoogleCloudPlatform/kubernetes/pkg/registry/generic/rest"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/pod"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
@@ -202,7 +203,24 @@ func (r *LogREST) New() runtime.Object {
 	return &api.PodLogOptions{}
 }
 
-// ResourceLocation returns a pod's logs location
-func (r *LogREST) ResourceLocation(ctx api.Context, name string) (*url.URL, http.RoundTripper, error) {
-	return pod.LogLocation(r.store, r.kubeletConn, ctx, name, "")
+// Get retrieves a runtime.Object that will stream the contents of the pod log
+func (r *LogREST) Get(ctx api.Context, name string, opts runtime.Object) (runtime.Object, error) {
+	logOpts, ok := opts.(*api.PodLogOptions)
+	if !ok {
+		return nil, fmt.Errorf("Invalid options object: %#v", opts)
+	}
+	location, transport, err := pod.LogLocation(r.store, r.kubeletConn, ctx, name, logOpts)
+	if err != nil {
+		return nil, err
+	}
+	return &genericrest.LocationStreamer{
+		Location:    location,
+		Transport:   transport,
+		ContentType: "text/plain",
+	}, nil
+}
+
+// NewGetOptions creates a new options object
+func (r *LogREST) NewGetOptions() runtime.Object {
+	return &api.PodLogOptions{}
 }
