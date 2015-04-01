@@ -25,6 +25,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	etcderr "github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors/etcd"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/rest"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/generic"
@@ -49,7 +50,7 @@ type REST struct {
 }
 
 // NewStorage returns a RESTStorage object that will work against pods.
-func NewStorage(h tools.EtcdHelper) PodStorage {
+func NewStorage(h tools.EtcdHelper, k client.ConnectionInfoGetter) PodStorage {
 	prefix := "/registry/pods"
 	store := &etcdgeneric.Etcd{
 		NewFunc:     func() runtime.Object { return &api.Pod{} },
@@ -86,7 +87,7 @@ func NewStorage(h tools.EtcdHelper) PodStorage {
 		Pod:     &REST{*store},
 		Binding: &BindingREST{store: store},
 		Status:  &StatusREST{store: &statusStore},
-		Log:     &LogREST{store: store},
+		Log:     &LogREST{store: store, kubeletConn: k},
 	}
 }
 
@@ -192,10 +193,16 @@ func (r *StatusREST) Update(ctx api.Context, obj runtime.Object) (runtime.Object
 
 // LogREST implements the log endpoint for a Pod
 type LogREST struct {
-	store *etcdgeneric.Etcd
+	store       *etcdgeneric.Etcd
+	kubeletConn client.ConnectionInfoGetter
 }
 
 // New creates a new Pod log options object
 func (r *LogREST) New() runtime.Object {
 	return &api.PodLogOptions{}
+}
+
+// ResourceLocation returns a pod's logs location
+func (r *LogREST) ResourceLocation(ctx api.Context, name string) (*url.URL, http.RoundTripper, error) {
+	return pod.LogLocation(r.store, r.kubeletConn, ctx, name, "")
 }
