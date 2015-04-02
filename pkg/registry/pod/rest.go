@@ -204,16 +204,22 @@ func LogLocation(getter ResourceGetter, connInfo client.ConnectionInfoGetter, ct
 	}
 	nodeHost := pod.Status.Host
 	if len(nodeHost) == 0 {
-		return nil, nil, fmt.Errorf("Pod %s has not been assigned a host.", name)
+		// If pod has not been assigned a host, return an empty location
+		return nil, nil, nil
 	}
 	nodeScheme, nodePort, nodeTransport, err := connInfo.GetConnectionInfo(nodeHost)
 	if err != nil {
 		return nil, nil, err
 	}
-	logURL := fmt.Sprintf("%s://%s:%d/containerLogs/%s/%s/%s", nodeScheme, nodeHost, nodePort, pod.Namespace, name, container)
-	loc, _ := url.Parse(logURL)
+	params := url.Values{}
 	if opts.Follow {
-		loc.RawQuery = "follow=true"
+		params.Add("follow", "true")
+	}
+	loc := &url.URL{
+		Scheme:   nodeScheme,
+		Host:     fmt.Sprintf("%s:%d", nodeHost, nodePort),
+		Path:     fmt.Sprintf("/containerLogs/%s/%s/%s", pod.Namespace, name, container),
+		RawQuery: params.Encode(),
 	}
 	return loc, nodeTransport, nil
 }

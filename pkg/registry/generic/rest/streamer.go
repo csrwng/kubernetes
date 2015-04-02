@@ -21,6 +21,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/rest"
 )
 
 // LocationStreamer is a resource that streams the contents of a particular
@@ -29,13 +31,21 @@ type LocationStreamer struct {
 	Location    *url.URL
 	Transport   http.RoundTripper
 	ContentType string
+	Flush       bool
 }
+
+// a LocationStreamer must implement a rest.ResourceStreamer
+var _ rest.ResourceStreamer = &LocationStreamer{}
 
 // IsAnAPIObject marks this object as a runtime.Object
 func (*LocationStreamer) IsAnAPIObject() {}
 
-// InputStream returns a stream with the contents of the URL location
-func (s *LocationStreamer) InputStream(apiVersion, acceptHeader string) (io.ReadCloser, string, error) {
+// InputStream returns a stream with the contents of the URL location. If no location is provided,
+// a null stream is returned.
+func (s *LocationStreamer) InputStream(apiVersion, acceptHeader string) (stream io.ReadCloser, flush bool, contentType string, err error) {
+	if s.Location == nil {
+		return nil, false, "", nil
+	}
 	transport := s.Transport
 	if transport == nil {
 		transport = http.DefaultTransport
@@ -43,14 +53,16 @@ func (s *LocationStreamer) InputStream(apiVersion, acceptHeader string) (io.Read
 	client := &http.Client{Transport: transport}
 	resp, err := client.Get(s.Location.String())
 	if err != nil {
-		return nil, "", err
+		return
 	}
-	contentType := s.ContentType
+	contentType = s.ContentType
 	if len(contentType) == 0 {
 		contentType = resp.Header.Get("Content-Type")
 		if len(contentType) > 0 {
 			contentType = strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0])
 		}
 	}
-	return resp.Body, contentType, nil
+	flush = s.Flush
+	stream = resp.Body
+	return
 }

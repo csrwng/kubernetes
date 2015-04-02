@@ -1234,10 +1234,10 @@ type PodLogOptions struct {
 	TypeMeta `json:",inline"`
 
 	// Container for which to return logs
-	Container string `json:"container" description:"the container for which to stream logs; defaults to first container in pod"`
+	Container string
 
 	// If true, follow the logs for the pod
-	Follow bool `json:"follow" description:"follow the log stream of the pod; defaults to false"`
+	Follow bool
 }
 
 // Status is a return value for calls that don't return other objects.

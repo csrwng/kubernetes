@@ -73,8 +73,12 @@ type RequestScope struct {
 	ServerAPIVersion string
 }
 
+// getterFunc performs a get request with the given context and object name. The request
+// may be used to deserialize an options object to pass to the getter.
 type getterFunc func(ctx api.Context, name string, req *restful.Request) (runtime.Object, error)
 
+// getResourceHandler is an HTTP handler function for get requests. It delegates to the
+// passed-in getterFunc to perform the actual get.
 func getResourceHandler(scope RequestScope, getter getterFunc) restful.RouteFunction {
 	return func(req *restful.Request, res *restful.Response) {
 		w := res.ResponseWriter

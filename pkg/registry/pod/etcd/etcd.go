@@ -217,6 +217,7 @@ func (r *LogREST) Get(ctx api.Context, name string, opts runtime.Object) (runtim
 		Location:    location,
 		Transport:   transport,
 		ContentType: "text/plain",
+		Flush:       logOpts.Follow,
 	}, nil
 }
 

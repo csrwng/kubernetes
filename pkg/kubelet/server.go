@@ -38,7 +38,7 @@ import (
 	kubecontainer "github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/container"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/types"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util/flushwriter"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util/httpstream"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util/httpstream/spdy"
 	"github.com/golang/glog"
@@ -248,7 +248,7 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, req *http.Request) {
 	if _, ok := w.(http.Flusher); !ok {
 		s.error(w, fmt.Errorf("unable to convert %v into http.Flusher", w))
 	}
-	fw := util.NewFlushWriter(w)
+	fw := flushwriter.New(w)
 	w.Header().Set("Transfer-Encoding", "chunked")
 	w.WriteHeader(http.StatusOK)
 	err = s.host.GetKubeletContainerLogs(kubecontainer.GetPodFullName(pod), containerName, tail, follow, fw, fw)

@@ -1,13 +1,13 @@
-package util
+package flushwriter
 
 import (
 	"io"
 	"net/http"
 )
 
-// NewFlushWriter wraps an io.Writer into a writer that flushes after every write if
-// the Flusher interface is implemented
-func NewFlushWriter(w io.Writer) io.Writer {
+// New wraps an io.Writer into a writer that flushes after every write if
+// the writer implements the Flusher interface.
+func New(w io.Writer) io.Writer {
 	fw := &flushWriter{
 		writer: w,
 	}
@@ -23,7 +23,8 @@ type flushWriter struct {
 	writer  io.Writer
 }
 
-// Write is a FlushWriter implementation of the io.Writer that sends any buffered data to the client.
+// Write is a FlushWriter implementation of the io.Writer that sends any buffered
+// data to the client.
 func (fw *flushWriter) Write(p []byte) (n int, err error) {
 	n, err = fw.writer.Write(p)
 	if err != nil {
