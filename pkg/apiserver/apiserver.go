@@ -222,7 +222,8 @@ func write(statusCode int, apiVersion string, codec runtime.Codec, object runtim
 		}
 		w.Header().Set("Content-Type", contentType)
 		w.WriteHeader(statusCode)
-		io.Copy(w, out)
+		fw := util.NewFlushWriter(w)
+		io.Copy(fw, out)
 		return
 	}
 	writeJSON(statusCode, codec, object, w)
