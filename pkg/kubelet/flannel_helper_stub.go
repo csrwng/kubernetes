@@ -16,32 +16,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package cm
+package kubelet
 
-import (
-	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/kubelet/cadvisor"
-	"k8s.io/kubernetes/pkg/util/mount"
-)
+import "fmt"
 
-type stubContainerManager struct{}
+// A Kubelet to flannel bridging helper.
+type flannelHelper struct{}
 
-func (stubContainerManager) Start() error {
-	return nil
+// NewFlannelHelper creates a new flannel helper.
+func NewFlannelHelper() FlannelHelper {
+	return &flannelHelper{}
 }
 
-func (stubContainerManager) SystemCgroupsLimit() api.ResourceList {
-	return api.ResourceList{}
-}
-
-func (stubContainerManager) GetNodeConfig() NodeConfig {
-	return NodeConfig{}
-}
-
-func (cm *stubContainerManager) Status() Status {
-	return Status{}
-}
-
-func NewContainerManager(_ mount.Interface, _ cadvisor.Interface, _ NodeConfig) (ContainerManager, error) {
-	return &stubContainerManager{}, nil
+// Handshake waits for the flannel subnet file and installs a few IPTables
+// rules, returning the pod CIDR allocated for this node.
+func (f *flannelHelper) Handshake() (podCIDR string, err error) {
+	return "", fmt.Errorf("not supported")
 }
