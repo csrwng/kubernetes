@@ -32,7 +32,7 @@ type RealOS struct{}
 
 // MkDir will will call os.Mkdir to create a directory.
 func (RealOS) Mkdir(path string, perm os.FileMode) error {
-	return os.Mkdir(path, perm)
+	return os.MkdirAll(path, perm)
 }
 
 // Symlink will call os.Symlink to create a symbolic link.
