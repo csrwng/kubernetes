@@ -2291,7 +2291,8 @@ func (dm *WindowsDockerManager) SyncPod(pod *api.Pod, _ api.PodStatus, podStatus
 		// See createPodInfraContainer for infra container setup.
 		// namespaceMode := fmt.Sprintf("container:%v", podInfraContainerID)
 		namespaceMode := ""
-		_, err = dm.runContainerInPod(pod, container, namespaceMode, namespaceMode, getPidMode(pod), podIP, restartCount)
+		networkMode := os.Getenv("CONTAINER_NETWORK")
+		_, err = dm.runContainerInPod(pod, container, networkMode, namespaceMode, getPidMode(pod), podIP, restartCount)
 		if err != nil {
 			startContainerResult.Fail(kubecontainer.ErrRunContainer, err.Error())
 			// TODO(bburns) : Perhaps blacklist a container after N failures?
