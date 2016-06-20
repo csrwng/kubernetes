@@ -646,7 +646,7 @@ func (dm *DockerManager) runContainer(
 
 	hc := &docker.HostConfig{
 		// 		Binds:          binds,
-		NetworkMode: "default",
+		NetworkMode: netMode,
 		// 		IpcMode:        ipcMode,
 		// 		UTSMode:        utsMode,
 		// 		PidMode:        pidMode,
