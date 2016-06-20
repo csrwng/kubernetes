@@ -372,11 +372,11 @@ func (dm *DockerManager) determineContainerIP(podNamespace, podName string, cont
 		result = container.NetworkSettings.IPAddress
 		if len(result) == 0 {
 			for _, network := range container.NetworkSettings.Networks {
-			    if len(network.IPAddress) > 0 {
+				if len(network.IPAddress) > 0 {
 					result = network.IPAddress
 					break
-				} 
-			} 
+				}
+			}
 		}
 	}
 
@@ -425,9 +425,7 @@ func (dm *DockerManager) inspectContainer(id string, podName, podNamespace strin
 		// Container that are running, restarting and paused
 		status.State = kubecontainer.ContainerStateRunning
 		status.StartedAt = iResult.State.StartedAt
-		if containerName == PodInfraContainerName {
-			ip = dm.determineContainerIP(podNamespace, podName, iResult)
-		}
+		ip = dm.determineContainerIP(podNamespace, podName, iResult)
 		return &status, ip, nil
 	}
 
