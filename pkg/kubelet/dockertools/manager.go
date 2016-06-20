@@ -370,6 +370,14 @@ func (dm *DockerManager) determineContainerIP(podNamespace, podName string, cont
 
 	if container.NetworkSettings != nil {
 		result = container.NetworkSettings.IPAddress
+		if len(result) == 0 {
+			for _, network := range container.NetworkSettings.Networks {
+			    if len(network.IPAddress) > 0 {
+					result = network.IPAddress
+					break
+				} 
+			} 
+		}
 	}
 
 	if dm.networkPlugin.Name() != network.DefaultPluginName {
