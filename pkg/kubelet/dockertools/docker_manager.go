@@ -473,9 +473,7 @@ func (dm *DockerManager) inspectContainer(id string, podName, podNamespace strin
 		// Container that are running, restarting and paused
 		status.State = kubecontainer.ContainerStateRunning
 		status.StartedAt = startedAt
-		if containerName == PodInfraContainerName {
-			ip = dm.determineContainerIP(podNamespace, podName, iResult)
-		}
+		ip = dm.determineContainerIP(podNamespace, podName, iResult)
 		return &status, ip, nil
 	}
 
