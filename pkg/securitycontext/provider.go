@@ -109,7 +109,7 @@ func ModifySecurityOptions(config []string, selinuxOpts *api.SELinuxOptions) []s
 // of name:value
 func modifySecurityOption(config []string, name, value string) []string {
 	if len(value) > 0 {
-		config = append(config, fmt.Sprintf("%s:%s", name, value))
+		config = append(config, fmt.Sprintf("%s=%s", name, value))
 	}
 	return config
 }
