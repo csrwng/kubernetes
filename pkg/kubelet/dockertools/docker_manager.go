@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"net"
 	"os"
 	"os/exec"
 	"path"
@@ -783,58 +782,57 @@ func (dm *DockerManager) runContainer(
 	securityContextProvider := securitycontext.NewSimpleSecurityContextProvider()
 	securityContextProvider.ModifyContainerConfig(pod, container, dockerOpts.Config)
 	securityContextProvider.ModifyHostConfig(pod, container, dockerOpts.HostConfig, supplementalGids)
-	createResp, err := dm.client.CreateContainer(dockerOpts)
-	if err != nil {
-		dm.recorder.Eventf(ref, api.EventTypeWarning, events.FailedToCreateContainer, "Failed to create docker container %q of pod %q with error: %v", container.Name, format.Pod(pod), err)
-		return kubecontainer.ContainerID{}, err
-	}
-	if len(createResp.Warnings) != 0 {
-		glog.V(2).Infof("Container %q of pod %q created with warnings: %v", container.Name, format.Pod(pod), createResp.Warnings)
-	}
-
-	createdEventMsg := fmt.Sprintf("Created container with docker id %v", utilstrings.ShortenString(createResp.ID, 12))
-	if len(securityOpts) > 0 {
-		var msgs []string
-		for _, opt := range securityOpts {
-			msg := opt.msg
-			if msg == "" {
-				msg = opt.value
-			}
-			msgs = append(msgs, fmt.Sprintf("%s=%s", opt.key, truncateMsg(msg, 256)))
-		}
-		createdEventMsg = fmt.Sprintf("%s; Security:[%s]", createdEventMsg, strings.Join(msgs, " "))
-	}
-	dm.recorder.Eventf(ref, api.EventTypeNormal, events.CreatedContainer, createdEventMsg)
-
-	if err = dm.client.StartContainer(createResp.ID); err != nil {
-		dm.recorder.Eventf(ref, api.EventTypeWarning, events.FailedToStartContainer,
-			"Failed to start container with docker id %v with error: %v", utilstrings.ShortenString(createResp.ID, 12), err)
-		return kubecontainer.ContainerID{}, err
-	}
-	dm.recorder.Eventf(ref, api.EventTypeNormal, events.StartedContainer, "Started container with docker id %v", utilstrings.ShortenString(createResp.ID, 12))
-
-	return kubecontainer.DockerID(createResp.ID).ContainerID(), nil
-}
-
-func portsInUse(ports map[dockernat.Port]struct{}) bool {
-	for port, _ := range ports {
-		listenString := fmt.Sprintf(":%d", port.Int())
-		ln, err := net.Listen("tcp", listenString)
+	for {
+		// optsString, _ := json.Marshal(dockerOpts)
+		// glog.Infof("Creating container with options: %s", string(optsString))
+		createResp, err := dm.client.CreateContainer(dockerOpts)
 		if err != nil {
-			return true
+			dm.recorder.Eventf(ref, api.EventTypeWarning, events.FailedToCreateContainer, "Failed to create docker container %q of pod %q with error: %v", container.Name, format.Pod(pod), err)
+			return kubecontainer.ContainerID{}, err
 		}
-		ln.Close()
+		if len(createResp.Warnings) != 0 {
+			glog.V(2).Infof("Container %q of pod %q created with warnings: %v", container.Name, format.Pod(pod), createResp.Warnings)
+		}
+
+		createdEventMsg := fmt.Sprintf("Created container with docker id %v", utilstrings.ShortenString(createResp.ID, 12))
+		if len(securityOpts) > 0 {
+			var msgs []string
+			for _, opt := range securityOpts {
+				msg := opt.msg
+				if msg == "" {
+					msg = opt.value
+				}
+				msgs = append(msgs, fmt.Sprintf("%s=%s", opt.key, truncateMsg(msg, 256)))
+			}
+			createdEventMsg = fmt.Sprintf("%s; Security:[%s]", createdEventMsg, strings.Join(msgs, " "))
+		}
+		dm.recorder.Eventf(ref, api.EventTypeNormal, events.CreatedContainer, createdEventMsg)
+
+		if err = dm.client.StartContainer(createResp.ID); err != nil {
+			if dockerOpts.Config.ExposedPorts != nil && len(dockerOpts.Config.ExposedPorts) > 0 {
+				dockerOpts.Config.ExposedPorts = map[dockernat.Port]struct{}{}
+				dockerOpts.HostConfig.PortBindings = dockernat.PortMap{}
+				removeErr := dm.client.RemoveContainer(createResp.ID, dockertypes.ContainerRemoveOptions{})
+				if removeErr != nil {
+					return kubecontainer.ContainerID{}, err
+				}
+				continue
+			}
+			dm.recorder.Eventf(ref, api.EventTypeWarning, events.FailedToStartContainer,
+				"Failed to start container with docker id %v with error: %v", utilstrings.ShortenString(createResp.ID, 12), err)
+			return kubecontainer.ContainerID{}, err
+		}
+		dm.recorder.Eventf(ref, api.EventTypeNormal, events.StartedContainer, "Started container with docker id %v", utilstrings.ShortenString(createResp.ID, 12))
+
+		return kubecontainer.DockerID(createResp.ID).ContainerID(), nil
 	}
-	return false
+	return kubecontainer.ContainerID{}, fmt.Errorf("Failed to create container in 2 attempts")
 }
 
 // setInfraContainerNetworkConfig sets the network configuration for the infra-container. We only set network configuration for infra-container, all
 // the user containers will share the same network namespace with infra-container.
 func setInfraContainerNetworkConfig(pod *api.Pod, netMode string, opts *kubecontainer.RunContainerOptions, dockerOpts *dockertypes.ContainerCreateConfig) {
 	exposedPorts, portBindings := makePortsAndBindings(opts.PortMappings)
-	if portsInUse(exposedPorts) {
-		return
-	}
 	dockerOpts.Config.ExposedPorts = exposedPorts
 	dockerOpts.HostConfig.PortBindings = dockernat.PortMap(portBindings)
 
