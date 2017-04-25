@@ -770,7 +770,7 @@ func (dm *DockerManager) runContainer(
 	}
 
 	// Set network configuration for infra-container
-	if container.Name == PodInfraContainerName {
+	if container.Name != PodInfraContainerName {
 		setInfraContainerNetworkConfig(pod, netMode, opts, &dockerOpts)
 	}
 
