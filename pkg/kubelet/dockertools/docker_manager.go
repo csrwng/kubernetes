@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"os"
 	"os/exec"
 	"path"
@@ -815,10 +816,25 @@ func (dm *DockerManager) runContainer(
 	return kubecontainer.DockerID(createResp.ID).ContainerID(), nil
 }
 
+func portsInUse(ports map[dockernat.Port]struct{}) bool {
+	for port, _ := range ports {
+		listenString := fmt.Sprintf(":%d", port.Int())
+		ln, err := net.Listen("tcp", listenString)
+		if err != nil {
+			return true
+		}
+		ln.Close()
+	}
+	return false
+}
+
 // setInfraContainerNetworkConfig sets the network configuration for the infra-container. We only set network configuration for infra-container, all
 // the user containers will share the same network namespace with infra-container.
 func setInfraContainerNetworkConfig(pod *api.Pod, netMode string, opts *kubecontainer.RunContainerOptions, dockerOpts *dockertypes.ContainerCreateConfig) {
 	exposedPorts, portBindings := makePortsAndBindings(opts.PortMappings)
+	if portsInUse(exposedPorts) {
+		return
+	}
 	dockerOpts.Config.ExposedPorts = exposedPorts
 	dockerOpts.HostConfig.PortBindings = dockernat.PortMap(portBindings)
 
