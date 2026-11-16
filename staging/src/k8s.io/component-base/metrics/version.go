@@ -32,6 +32,12 @@ var (
 // RegisterBuildInfo registers the build and version info in a metadata metric in prometheus
 func RegisterBuildInfo(r KubeRegistry) {
 	info := version.Get()
+	// Downstream (OpenShift) carry: the kubernetes_build_info metric reads
+	// from the same KAS_REPORTED_VERSION_FILE override as the /version
+	// endpoint, so it does not leak the real build identifiers.
+	if reported := version.ReportedVersion(); reported != nil {
+		info = *reported
+	}
 	r.MustRegister(buildInfo)
 	buildInfo.WithLabelValues(info.Major, info.Minor, info.GitVersion, info.GitCommit, info.GitTreeState, info.BuildDate, info.GoVersion, info.Compiler, info.Platform).Set(1)
 }

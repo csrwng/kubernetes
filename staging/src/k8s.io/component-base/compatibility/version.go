@@ -180,10 +180,26 @@ func (m *effectiveVersion) Info() *apimachineryversion.Info {
 	}
 
 	info := baseversion.Get()
-	info.Major = version.Itoa(binVer.Major())
-	info.Minor = version.Itoa(binVer.Minor())
-	if info.GitVersion == "" {
-		info.GitVersion = binVer.String()
+	// Downstream (OpenShift) carry: when KAS_REPORTED_VERSION_FILE is set,
+	// report the masked build info instead of this binary's. The binary
+	// version must remain internally consistent, so the override replaces
+	// only the externally reported fields.
+	if reported := baseversion.ReportedVersion(); reported != nil {
+		info.Major = reported.Major
+		info.Minor = reported.Minor
+		info.GitVersion = reported.GitVersion
+		info.GitCommit = reported.GitCommit
+		info.GitTreeState = reported.GitTreeState
+		info.BuildDate = reported.BuildDate
+		info.GoVersion = reported.GoVersion
+		info.Compiler = reported.Compiler
+		info.Platform = reported.Platform
+	} else {
+		info.Major = version.Itoa(binVer.Major())
+		info.Minor = version.Itoa(binVer.Minor())
+		if info.GitVersion == "" {
+			info.GitVersion = binVer.String()
+		}
 	}
 
 	if ev := m.EmulationVersion(); ev != nil {
